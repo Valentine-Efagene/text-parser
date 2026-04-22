@@ -1,36 +1,61 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Handwritten Form Parser (Next.js + Google Document AI)
 
-## Getting Started
+This app uses Google Document AI to extract text and fields from hand-filled forms and then parses:
 
-First, run the development server:
+- detected form fields (name/value with confidence)
+- normalized key-value fields (for lines like `Invoice No: 12345`)
+- entities such as emails, phones, urls, dates, and amounts
+- raw OCR text + line-level output
+
+## Tech stack
+
+- Next.js (App Router, latest)
+- TypeScript
+- Tailwind CSS
+- pnpm
+- `@google-cloud/documentai`
+
+## 1) Prerequisites
+
+1. Create or choose a Google Cloud project.
+2. Enable the Document AI API.
+3. Create a Document AI processor for forms (Form Parser is recommended).
+4. Create a service account with Document AI access.
+5. Download the JSON key.
+
+## 2) Environment variables
+
+Copy `.env.example` to `.env.local` and configure one of these:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/document-ai-service-account.json
+GOOGLE_DOCUMENT_AI_PROJECT_ID=your-gcp-project-id
+GOOGLE_DOCUMENT_AI_LOCATION=us
+GOOGLE_DOCUMENT_AI_PROCESSOR_ID=your-processor-id
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Or for serverless/platform secrets:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+GOOGLE_DOCUMENT_AI_CREDENTIALS_BASE64=<base64-of-service-account-json>
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 3) Run locally
 
-## Learn More
+```bash
+pnpm install
+pnpm dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+Open http://localhost:3000, upload an image or PDF, and click **Parse Form**.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## API endpoint
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `POST /api/ocr`
+- Body: `multipart/form-data` with `file` (image or PDF)
+- Response: JSON with `rawText`, `parsed`, and `meta`
 
-## Deploy on Vercel
+## Notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- The OCR route runs on the Node.js runtime (`runtime = "nodejs"`).
+- If OCR fails, verify processor ID, location, credentials, and Document AI API enablement.
