@@ -1,202 +1,257 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
-type ApiResponse = {
-  fileName: string;
-  mimeType: string;
-  rawText: string;
-  parsed: {
-    lines: string[];
-    keyValues: Record<string, string>;
-    formFields: {
-      name: string;
-      value: string;
-      confidence: number | null;
-    }[];
-    entities: {
-      emails: string[];
-      phones: string[];
-      urls: string[];
-      dates: string[];
-      amounts: string[];
-    };
-  };
-  meta: {
-    charCount: number;
-    lineCount: number;
-    formFieldCount: number;
-  };
-  error?: string;
-};
+import { type ApiResponse } from "@/components/ResultsPanel";
+import { ReviewPanel } from "@/components/ReviewPanel";
+import { MOCK_RESPONSE } from "@/lib/mock-response";
+
+type Step = "upload" | "parsing" | "review";
 
 export default function Home() {
-  const [file, setFile] = useState<File | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<ApiResponse | null>(null);
+  const [step, setStep] = useState<Step>("upload");
+  const [file, setFile] = useState<File | undefined>();
+  const [fileUrl, setFileUrl] = useState<string | undefined>();
+  const [isDragging, setIsDragging] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const [result, setResult] = useState<ApiResponse | undefined>();
+  const [useMock, setUseMock] = useState(true);
 
-  const hasEntities = useMemo(() => {
-    if (!result) {
-      return false;
-    }
+  function selectFile(f: File) {
+    if (fileUrl) URL.revokeObjectURL(fileUrl);
+    setFile(f);
+    setFileUrl(URL.createObjectURL(f));
+    setError(undefined);
+    setResult(undefined);
+  }
 
-    const { entities } = result.parsed;
-    return Object.values(entities).some((items) => items.length > 0);
-  }, [result]);
+  function clearFile() {
+    if (fileUrl) URL.revokeObjectURL(fileUrl);
+    setFile(undefined);
+    setFileUrl(undefined);
+  }
 
-  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function handleBack() {
+    setStep("upload");
+  }
 
-    if (!file) {
-      setError("Choose an image file first.");
-      return;
-    }
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(true);
+  }
 
-    setError(null);
-    setIsLoading(true);
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+    const f = e.dataTransfer.files[0];
+    if (f) selectFile(f);
+  }
+
+  async function handleAnalyse() {
+    if (!file) return;
+    setStep("parsing");
+    setError(undefined);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      let payload: ApiResponse;
 
-      const response = await fetch("/api/ocr", {
-        method: "POST",
-        body: formData,
-      });
+      if (useMock) {
+        // Simulate a short delay so the parsing step is visible
+        await new Promise((r) => setTimeout(r, 800));
+        payload = { ...MOCK_RESPONSE, fileName: file.name, mimeType: file.type };
+      } else {
+        const formData = new FormData();
+        formData.append("file", file);
 
-      const payload = (await response.json()) as ApiResponse;
+        const response = await fetch("/api/ocr-openai", {
+          method: "POST",
+          body: formData,
+        });
 
-      if (!response.ok) {
-        throw new Error(payload.error ?? "Failed to parse OCR.");
+        payload = (await response.json()) as ApiResponse;
+
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Failed to parse document.");
+        }
       }
 
       setResult(payload);
-    } catch (requestError) {
-      const message =
-        requestError instanceof Error
-          ? requestError.message
-          : "Something went wrong while processing the image.";
-      setError(message);
-      setResult(null);
-    } finally {
-      setIsLoading(false);
+      setStep("review");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setStep("upload");
     }
   }
 
+  // ── Parsing step ──────────────────────────────────────────────────────────
+  if (step === "parsing") {
+    return (
+      <main className="flex flex-1 flex-col items-center justify-center gap-5">
+        <div className="h-12 w-12 animate-spin rounded-full border-4 border-[var(--border)] border-t-[var(--accent)]" />
+        <p className="text-sm font-medium text-[var(--muted)]">Analysing document…</p>
+      </main>
+    );
+  }
+
+  // ── Review step ───────────────────────────────────────────────────────────
+  if (step === "review" && result && fileUrl && file) {
+    return (
+      <main className="flex flex-1 flex-col min-h-0">
+        <ReviewPanel
+          result={result}
+          fileUrl={fileUrl}
+          mimeType={file.type}
+          onBack={handleBack}
+        />
+      </main>
+    );
+  }
+
+  // ── Upload step ───────────────────────────────────────────────────────────
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-8 md:px-8 md:py-12">
-      <section className="rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_16px_40px_rgba(17,34,26,0.08)] md:p-10">
-        <p className="text-sm font-mono uppercase tracking-[0.2em] text-[var(--muted)]">
-          Google Document AI
+    <main className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center gap-8 px-4 py-12">
+      <div className="text-center">
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
+          Form Parser
         </p>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-5xl">
-          Hand-filled form parser with structured extraction
-        </h1>
-        <p className="mt-4 max-w-2xl text-base text-[var(--muted)] md:text-lg">
-          Upload a scanned form image or PDF. The app uses Google Document AI to
-          extract handwritten and printed text, detect form fields, and return
-          normalized key-value output.
+        <h1 className="mt-3 text-4xl font-semibold tracking-tight">Extract form fields</h1>
+        <p className="mt-3 text-sm text-[var(--muted)]">
+          Upload a scanned form image. GPT-4o Vision extracts handwritten and printed fields so
+          you can verify them side-by-side.
         </p>
+      </div>
 
-        <form className="mt-8 grid gap-4 md:grid-cols-[1fr_auto]" onSubmit={onSubmit}>
-          <label className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-4 py-3 text-sm font-medium text-[var(--foreground)]">
-            <input
-              type="file"
-              accept="image/*,application/pdf"
-              className="w-full cursor-pointer text-sm"
-              onChange={(event) => {
-                setFile(event.target.files?.[0] ?? null);
-              }}
-            />
-          </label>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="rounded-xl bg-[var(--accent)] px-6 py-3 font-semibold text-white transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isLoading ? "Parsing..." : "Parse Form"}
-          </button>
-        </form>
-
-        {error && (
-          <p className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </p>
-        )}
-      </section>
-
-      {result && (
-        <section className="grid gap-6 md:grid-cols-2">
-          <article className="rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_12px_24px_rgba(17,34,26,0.06)]">
-            <h2 className="text-xl font-semibold">Summary</h2>
-            <p className="mt-4 text-sm text-[var(--muted)]">File: {result.fileName}</p>
-            <p className="text-sm text-[var(--muted)]">Type: {result.mimeType}</p>
-            <p className="text-sm text-[var(--muted)]">
-              Characters: {result.meta.charCount} | Lines: {result.meta.lineCount} |
-              Form fields: {result.meta.formFieldCount}
-            </p>
-
-            <h3 className="mt-6 text-base font-semibold">Detected Form Fields</h3>
-            {result.parsed.formFields.length === 0 ? (
-              <p className="mt-2 text-sm text-[var(--muted)]">No form fields detected.</p>
-            ) : (
-              <ul className="mt-2 space-y-2 text-sm">
-                {result.parsed.formFields.map((field, index) => (
-                  <li
-                    key={`${field.name}-${index}`}
-                    className="rounded-lg bg-[var(--surface-strong)] px-3 py-2"
-                  >
-                    <p className="font-medium">{field.name || "(Unnamed field)"}</p>
-                    <p>{field.value || "-"}</p>
-                    <p className="font-mono text-xs text-[var(--muted)]">
-                      Confidence: {field.confidence ? `${Math.round(field.confidence * 100)}%` : "-"}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <h3 className="mt-6 text-base font-semibold">Key-Value Fields</h3>
-            {Object.keys(result.parsed.keyValues).length === 0 ? (
-              <p className="mt-2 text-sm text-[var(--muted)]">No obvious fields found.</p>
-            ) : (
-              <ul className="mt-2 space-y-2 text-sm">
-                {Object.entries(result.parsed.keyValues).map(([key, value]) => (
-                  <li key={key} className="rounded-lg bg-[var(--surface-strong)] px-3 py-2">
-                    <span className="font-mono text-xs uppercase tracking-wider text-[var(--muted)]">
-                      {key}
-                    </span>
-                    <p className="font-medium">{value}</p>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <h3 className="mt-6 text-base font-semibold">Detected Entities</h3>
-            {!hasEntities && (
-              <p className="mt-2 text-sm text-[var(--muted)]">No entities detected.</p>
-            )}
-            <div className="mt-2 grid gap-3 text-sm">
-              {Object.entries(result.parsed.entities).map(([label, values]) => (
-                <div key={label} className="rounded-lg bg-[var(--surface-strong)] px-3 py-2">
-                  <p className="font-mono text-xs uppercase tracking-wider text-[var(--muted)]">
-                    {label}
-                  </p>
-                  <p className="mt-1 break-all">{values.join(", ") || "-"}</p>
-                </div>
-              ))}
+      {/* Drop zone */}
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={[
+          "relative flex w-full flex-col items-center gap-4 rounded-3xl border-2 border-dashed p-12 transition",
+          isDragging
+            ? "border-[var(--accent)] bg-[var(--surface-strong)]"
+            : "border-[var(--border)] bg-[var(--surface)]",
+        ].join(" ")}
+      >
+        {file ? (
+          <div className="flex flex-col items-center gap-2 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-strong)] text-[var(--accent)]">
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path
+                  d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 0 0 1.946-.806 3.42 3.42 0 0 1 4.438 0 3.42 3.42 0 0 0 1.946.806 3.42 3.42 0 0 1 3.138 3.138 3.42 3.42 0 0 0 .806 1.946 3.42 3.42 0 0 1 0 4.438 3.42 3.42 0 0 0-.806 1.946 3.42 3.42 0 0 1-3.138 3.138 3.42 3.42 0 0 0-1.946.806 3.42 3.42 0 0 1-4.438 0 3.42 3.42 0 0 0-1.946-.806 3.42 3.42 0 0 1-3.138-3.138 3.42 3.42 0 0 0-.806-1.946 3.42 3.42 0 0 1 0-4.438 3.42 3.42 0 0 0 .806-1.946 3.42 3.42 0 0 1 3.138-3.138z"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </div>
-          </article>
+            <p className="font-medium">{file.name}</p>
+            <p className="text-xs text-[var(--muted)]">{(file.size / 1024).toFixed(0)} KB</p>
+            <button
+              type="button"
+              onClick={clearFile}
+              className="mt-1 text-xs text-[var(--muted)] underline underline-offset-2 hover:text-[var(--foreground)]"
+            >
+              Remove
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--surface-strong)] text-[var(--accent)]">
+              <svg
+                width="28"
+                height="28"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path
+                  d="M4 16v1a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-1M12 4v11m-4-4 4-4 4 4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+            <div className="text-center">
+              <p className="font-medium">Drop your file here</p>
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                or click to browse — image or PDF
+              </p>
+            </div>
+          </>
+        )}
 
-          <article className="rounded-3xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-[0_12px_24px_rgba(17,34,26,0.06)]">
-            <h2 className="text-xl font-semibold">Raw OCR Text</h2>
-            <pre className="mt-4 max-h-[500px] overflow-auto rounded-xl bg-[#0f1a14] p-4 font-mono text-xs leading-relaxed text-[#d4f3de]">
-              {result.rawText || "No text detected."}
-            </pre>
-          </article>
-        </section>
+        {/* Invisible full-area file input */}
+        <input
+          type="file"
+          accept="image/*,application/pdf"
+          className="absolute inset-0 cursor-pointer opacity-0"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) selectFile(f);
+          }}
+        />
+      </div>
+
+      {error && (
+        <p className="w-full rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </p>
       )}
+
+      {/* Mock / Live toggle */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={!useMock}
+          onClick={() => setUseMock((m) => !m)}
+          className={[
+            "relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none",
+            useMock ? "bg-[var(--border)]" : "bg-[var(--accent)]",
+          ].join(" ")}
+        >
+          <span
+            className={[
+              "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform",
+              useMock ? "translate-x-0" : "translate-x-5",
+            ].join(" ")}
+          />
+        </button>
+        <span className="text-sm text-[var(--muted)]">
+          {useMock ? (
+            <>
+              <span className="font-medium text-[var(--foreground)]">Mock mode</span>
+              {" — no API call"}
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-[var(--foreground)]">Live API</span>
+              {" — calls OpenAI"}
+            </>
+          )}
+        </span>
+      </div>
+
+      <button
+        disabled={!file}
+        onClick={handleAnalyse}
+        className="rounded-2xl bg-[var(--accent)] px-10 py-3 font-semibold text-white transition hover:bg-[var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        Analyse Document
+      </button>
     </main>
   );
 }
