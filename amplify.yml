@@ -5,6 +5,7 @@ frontend:
       commands:
         - npm i -g pnpm
         - pnpm install --frozen-lockfile
+        - echo "OPENAI_API_KEY=$OPENAI_API_KEY" >> .env.production
     build:
       commands:
         - pnpm build
