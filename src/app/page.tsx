@@ -121,8 +121,7 @@ export default function Home() {
         </p>
         <h1 className="mt-3 text-4xl font-semibold tracking-tight">Extract form fields</h1>
         <p className="mt-3 text-sm text-[var(--muted)]">
-          Upload a scanned form image. GPT-4o Vision extracts handwritten and printed fields so
-          you can verify them side-by-side.
+          Upload a scanned document.
         </p>
       </div>
 

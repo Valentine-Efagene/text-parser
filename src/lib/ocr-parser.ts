@@ -19,75 +19,8 @@ function uniqueMatches(source: string, regex: RegExp): string[] {
     return [...new Set(source.match(regex) ?? [])];
 }
 
-export type DocumentAiTextAnchor = {
-    textSegments?: {
-        startIndex?: string | number | { toNumber: () => number } | null;
-        endIndex?: string | number | { toNumber: () => number } | null;
-    }[] | null;
-};
-
-export type DocumentAiFormField = {
-    fieldName?: {
-        textAnchor?: DocumentAiTextAnchor | null;
-    } | null;
-    fieldValue?: {
-        textAnchor?: DocumentAiTextAnchor | null;
-    } | null;
-    confidence?: number | null;
-};
-
-function textFromAnchor(rawText: string, anchor?: DocumentAiTextAnchor | null): string {
-    const segments = anchor?.textSegments;
-
-    if (!segments || segments.length === 0) {
-        return "";
-    }
-
-    return segments
-        .map((segment) => {
-            const startValue = segment.startIndex;
-            const endValue = segment.endIndex;
-            const start = Number(
-                typeof startValue === "object" && startValue !== null && "toNumber" in startValue
-                    ? startValue.toNumber()
-                    : startValue ?? 0,
-            );
-            const end = Number(
-                typeof endValue === "object" && endValue !== null && "toNumber" in endValue
-                    ? endValue.toNumber()
-                    : endValue ?? 0,
-            );
-
-            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-                return "";
-            }
-
-            return rawText.slice(start, end);
-        })
-        .join("")
-        .trim();
-}
-
 function normalizeFieldName(value: string): string {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-}
-
-export function parseDocumentAiFormFields(
-    rawText: string,
-    fields: DocumentAiFormField[],
-): OcrParseResult["formFields"] {
-    return fields
-        .map((field) => {
-            const name = textFromAnchor(rawText, field.fieldName?.textAnchor);
-            const value = textFromAnchor(rawText, field.fieldValue?.textAnchor);
-
-            return {
-                name,
-                value,
-                confidence: typeof field.confidence === "number" ? field.confidence : null,
-            };
-        })
-        .filter((entry) => entry.name.length > 0 || entry.value.length > 0);
 }
 
 export function parseOcrText(
