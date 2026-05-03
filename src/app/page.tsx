@@ -17,7 +17,13 @@ export default function Home() {
   const [result, setResult] = useState<ApiResponse | undefined>();
   const [useMock, setUseMock] = useState(true);
 
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
   function selectFile(f: File) {
+    if (f.size > MAX_FILE_SIZE) {
+      setError(`File is too large (${(f.size / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is 10 MB.`);
+      return;
+    }
     if (fileUrl) URL.revokeObjectURL(fileUrl);
     setFile(f);
     setFileUrl(URL.createObjectURL(f));
@@ -68,10 +74,24 @@ export default function Home() {
         const formData = new FormData();
         formData.append("file", file);
 
-        const response = await fetch("/api/ocr-openai", {
-          method: "POST",
-          body: formData,
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60_000);
+
+        let response: Response;
+        try {
+          response = await fetch("/api/ocr-openai", {
+            method: "POST",
+            body: formData,
+            signal: controller.signal,
+          });
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            throw new Error("Request timed out after 60 seconds. Please try again.");
+          }
+          throw err;
+        } finally {
+          clearTimeout(timeoutId);
+        }
 
         payload = (await response.json()) as ApiResponse;
 

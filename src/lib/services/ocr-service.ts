@@ -51,6 +51,11 @@ export async function getUploadedFileFromRequest(
         throw new OcrServiceError(400, "No file uploaded.");
     }
 
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+    if (file.size > MAX_FILE_SIZE) {
+        throw new OcrServiceError(413, `File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum allowed size is 10 MB.`);
+    }
+
     const isImage = file.type.startsWith("image/");
     const isPdf = file.type === "application/pdf";
 

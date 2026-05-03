@@ -112,16 +112,7 @@ export function ReviewPanel({
                                             </span>
                                         )}
                                     </p>
-                                    {field.confidence !== null && (
-                                        <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-[var(--surface-strong)]">
-                                            <div
-                                                className="h-full rounded-full bg-[var(--accent)] transition-all"
-                                                style={{
-                                                    width: `${Math.round((field.confidence ?? 0) * 100)}%`,
-                                                }}
-                                            />
-                                        </div>
-                                    )}
+
                                 </li>
                             ))}
                         </ul>
