@@ -1,9 +1,11 @@
 "use client";
 
 import { ArrowLeft, Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { type ApiResponse } from "@/components/ResultsPanel";
+
+const LOW_CONFIDENCE_THRESHOLD = 0.9;
 
 export function ReviewPanel({
     result,
@@ -35,6 +37,29 @@ export function ReviewPanel({
                 confidence: null,
             }));
 
+    const [editedFields, setEditedFields] = useState(fields);
+
+    useEffect(() => {
+        setEditedFields(fields);
+    }, [result]);
+
+    const reviewSummary = useMemo(() => {
+        const lowConfidenceCount = editedFields.filter(
+            (field) =>
+                field.confidence !== null && field.confidence < LOW_CONFIDENCE_THRESHOLD,
+        ).length;
+
+        return { lowConfidenceCount };
+    }, [editedFields]);
+
+    function updateFieldValue(index: number, value: string) {
+        setEditedFields((current) =>
+            current.map((field, fieldIndex) =>
+                fieldIndex === index ? { ...field, value } : field,
+            ),
+        );
+    }
+
     return (
         <div className="flex flex-1 flex-col min-h-0">
             {/* Toolbar */}
@@ -50,6 +75,11 @@ export function ReviewPanel({
                 <span className="rounded-full bg-[var(--surface-strong)] px-2.5 py-0.5 font-mono text-xs text-[var(--muted)]">
                     {result.meta.formFieldCount} field{result.meta.formFieldCount !== 1 ? "s" : ""}
                 </span>
+                {reviewSummary.lowConfidenceCount > 0 && (
+                    <span className="rounded-full bg-amber-100 px-2.5 py-0.5 font-mono text-xs text-amber-800">
+                        {reviewSummary.lowConfidenceCount} need review
+                    </span>
+                )}
             </div>
 
             {/* Split panel */}
@@ -79,15 +109,31 @@ export function ReviewPanel({
                         <p className="text-sm text-[var(--muted)]">No fields detected.</p>
                     ) : (
                         <ul className="space-y-3">
-                            {fields.map((field, i) => (
+                            {editedFields.map((field, i) => (
                                 <li
                                     key={`${field.name}-${i}`}
                                     className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4"
                                 >
                                     <div className="flex items-start justify-between gap-2">
-                                        <p className="font-mono text-[11px] uppercase tracking-wider text-[var(--muted)]">
-                                            {field.name || "(Unnamed field)"}
-                                        </p>
+                                        <div>
+                                            <p className="font-mono text-[11px] uppercase tracking-wider text-[var(--muted)]">
+                                                {field.name || "(Unnamed field)"}
+                                            </p>
+                                            {field.confidence !== null && (
+                                                <p
+                                                    className={[
+                                                        "mt-1 text-xs font-medium",
+                                                        field.confidence < LOW_CONFIDENCE_THRESHOLD
+                                                            ? "text-amber-700"
+                                                            : "text-[var(--muted)]",
+                                                    ].join(" ")}
+                                                >
+                                                    {field.confidence < LOW_CONFIDENCE_THRESHOLD
+                                                        ? `Low confidence: ${Math.round(field.confidence * 100)}%`
+                                                        : `Confidence: ${Math.round(field.confidence * 100)}%`}
+                                                </p>
+                                            )}
+                                        </div>
                                         <button
                                             type="button"
                                             onClick={() =>
@@ -103,15 +149,18 @@ export function ReviewPanel({
                                             {copiedKey === `field-${i}` ? "Copied" : "Copy"}
                                         </button>
                                     </div>
-                                    <p className="mt-1.5 text-base font-medium leading-snug">
-                                        {field.value ? (
-                                            field.value
-                                        ) : (
-                                            <span className="italic text-[var(--muted)]">
-                                                empty
-                                            </span>
-                                        )}
-                                    </p>
+                                    <textarea
+                                        value={field.value}
+                                        onChange={(event) => updateFieldValue(i, event.target.value)}
+                                        rows={Math.max(2, Math.min(4, field.value.split(/\r?\n/).length || 1))}
+                                        placeholder="empty"
+                                        className={[
+                                            "mt-2 w-full rounded-lg border px-3 py-2 text-base leading-snug outline-none transition",
+                                            field.confidence !== null && field.confidence < LOW_CONFIDENCE_THRESHOLD
+                                                ? "border-amber-300 bg-amber-50/60 focus:border-amber-500"
+                                                : "border-[var(--border)] bg-white focus:border-[var(--accent)]",
+                                        ].join(" ")}
+                                    />
 
                                 </li>
                             ))}

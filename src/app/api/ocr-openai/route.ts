@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
     try {
-        const file = await getUploadedFileFromRequest(request, "image");
+        const file = await getUploadedFileFromRequest(request, "image-or-pdf");
         const payload = await processWithOpenAi(file);
         return NextResponse.json(payload);
     } catch (error) {

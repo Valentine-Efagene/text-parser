@@ -32,6 +32,17 @@ const EXPECTED_FIELDS = [
     "Full Name of NOK",
     "Contact of NOK",
     "Address of NOK",
+    "Relationship With NOK",
+    "Email of NOK",
+    "Property Type",
+    "Finishing Type",
+    "Preferred Location",
+    "City",
+    "State",
+    "Project Site",
+    "Payment Option",
+    "Signature",
+    "Date",
 ] as const;
 
 const ADAPTIVE_RULES = {
@@ -39,6 +50,8 @@ const ADAPTIVE_RULES = {
     strongHeaders: { minTitles: 3, minFields: 5 },
     denseLabels: { minTitles: 1, minFields: 12 },
 } as const;
+
+const LOW_CONFIDENCE_THRESHOLD = 0.9;
 
 function evaluateDocumentMatch(titleMatches: number, fieldMatches: number): {
     passed: boolean;
@@ -104,7 +117,7 @@ Analyse the form image and respond ONLY with a valid JSON object in this exact f
 {
   "text": "<full verbatim text from the form, preserving newlines>",
   "fields": [
-    { "name": "<field label>", "value": "<field value>" }
+        { "name": "<field label>", "value": "<field value>", "confidence": 0.0 }
   ]
 }
 
@@ -114,6 +127,8 @@ Rules:
 ${EXPECTED_FIELDS.map((field) => `  - ${field}`).join("\n")}
 - "fields" must also include any additional printed label/value pairs on the page, even if not in the list above.
 - If a field has no visible value, use an empty string for "value".
+- "confidence" must be a number from 0 to 1 representing how certain you are about the extracted value.
+- Use lower confidence for faint, ambiguous, partially occluded, or hard-to-read handwriting.
 - If a character is hard to decipher in one place, cross-check repeated occurrences elsewhere in the same document to resolve it.
 - Return a value for every identified field.
 - The forms are primarily for Nigerians, so names, street names, and places are likely Nigerian; use this context to disambiguate uncertain handwriting when needed.`;
@@ -136,13 +151,21 @@ function getOpenAiClient(): OpenAI {
 
 function extractOpenAiJson(content: string): {
     text?: string;
-    fields?: { name: string; value: string }[];
+    fields?: { name: string; value: string; confidence?: number | null }[];
 } {
     const jsonStr = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
     return JSON.parse(jsonStr) as {
         text?: string;
-        fields?: { name: string; value: string }[];
+        fields?: { name: string; value: string; confidence?: number | null }[];
     };
+}
+
+function normalizeConfidence(value: number | null | undefined): number | null {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+        return null;
+    }
+
+    return Math.max(0, Math.min(1, value));
 }
 
 function extractGuardJson(content: string): {
@@ -162,11 +185,22 @@ function extractGuardJson(content: string): {
 
 export async function processWithOpenAi(file: File) {
     const arrayBuffer = await file.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-    const dataUrl = `data:${file.type};base64,${base64}`;
+
+    let dataUrls: string[];
+    if (file.type === "application/pdf") {
+        const { pdfToImageDataUrls } = await import("./pdf-utils");
+        dataUrls = await pdfToImageDataUrls(arrayBuffer);
+        if (dataUrls.length === 0) {
+            throw new OcrServiceError(400, "The PDF file appears to be empty.");
+        }
+    } else {
+        const base64 = Buffer.from(arrayBuffer).toString("base64");
+        dataUrls = [`data:${file.type};base64,${base64}`];
+    }
 
     const client = getOpenAiClient();
 
+    // Guard check runs on the first page / image only
     const guardCompletion = await client.chat.completions.create({
         model: "gpt-4o",
         messages: [
@@ -174,7 +208,7 @@ export async function processWithOpenAi(file: File) {
                 role: "user",
                 content: [
                     { type: "text", text: DOCUMENT_GUARD_PROMPT },
-                    { type: "image_url", image_url: { url: dataUrl, detail: "low" } },
+                    { type: "image_url", image_url: { url: dataUrls[0], detail: "low" } },
                 ],
             },
         ],
@@ -224,30 +258,96 @@ export async function processWithOpenAi(file: File) {
                 role: "user",
                 content: [
                     { type: "text", text: OCR_PROMPT },
-                    { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
+                    { type: "image_url", image_url: { url: dataUrls[0], detail: "high" } },
                 ],
             },
         ],
         max_tokens: 4096,
     });
 
-    const content = completion.choices[0]?.message?.content ?? "";
-
-    let rawText = "";
-    let extractedFields: { name: string; value: string }[] = [];
-
-    try {
-        const data = extractOpenAiJson(content);
-        rawText = data.text?.trim() ?? "";
-        extractedFields = data.fields ?? [];
-    } catch {
-        rawText = content.trim();
+    // For multi-page PDFs, run OCR on all remaining pages and combine
+    const ocrContents: string[] = [completion.choices[0]?.message?.content ?? ""];
+    for (let i = 1; i < dataUrls.length; i++) {
+        const pageCompletion = await client.chat.completions.create({
+            model: "gpt-4o",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        { type: "text", text: OCR_PROMPT },
+                        { type: "image_url", image_url: { url: dataUrls[i], detail: "high" } },
+                    ],
+                },
+            ],
+            max_tokens: 4096,
+        });
+        ocrContents.push(pageCompletion.choices[0]?.message?.content ?? "");
     }
 
-    const formFields = extractedFields.map((field) => ({
-        name: field.name,
+    let rawText = "";
+    const fieldMap = new Map<string, { value: string; confidence: number | null }>();
+
+    for (const content of ocrContents) {
+        try {
+            const data = extractOpenAiJson(content);
+            const pageText = data.text?.trim() ?? "";
+            if (pageText) {
+                rawText = rawText ? `${rawText}\n\n${pageText}` : pageText;
+            }
+            for (const field of data.fields ?? []) {
+                const normalizedConfidence = normalizeConfidence(field.confidence);
+                const existing = fieldMap.get(field.name);
+
+                if (!existing) {
+                    fieldMap.set(field.name, {
+                        value: field.value,
+                        confidence: normalizedConfidence,
+                    });
+                    continue;
+                }
+
+                if (!existing.value && field.value) {
+                    fieldMap.set(field.name, {
+                        value: field.value,
+                        confidence: normalizedConfidence,
+                    });
+                    continue;
+                }
+
+                if (existing.value === field.value && normalizedConfidence !== null) {
+                    fieldMap.set(field.name, {
+                        value: existing.value,
+                        confidence: Math.max(existing.confidence ?? 0, normalizedConfidence),
+                    });
+                    continue;
+                }
+
+                if (
+                    field.value &&
+                    normalizedConfidence !== null &&
+                    normalizedConfidence > (existing.confidence ?? -1)
+                ) {
+                    fieldMap.set(field.name, {
+                        value: field.value,
+                        confidence: normalizedConfidence,
+                    });
+                }
+            }
+        } catch {
+            const fallback = content.trim();
+            if (fallback) {
+                rawText = rawText ? `${rawText}\n\n${fallback}` : fallback;
+            }
+        }
+    }
+
+    const formFields = Array.from(fieldMap.entries()).map(([name, field]) => ({
+        name,
         value: field.value,
-        confidence: null,
+        confidence:
+            field.confidence !== null && field.confidence < LOW_CONFIDENCE_THRESHOLD
+                ? field.confidence
+                : field.confidence,
     }));
 
     const parsed = parseOcrText(rawText, formFields);
