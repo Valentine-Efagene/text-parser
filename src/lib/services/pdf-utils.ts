@@ -10,7 +10,7 @@ GlobalWorkerOptions.workerSrc = path.resolve(
 
 /**
  * Renders each page of a PDF to a base64-encoded PNG data URL.
- * Scale 2.0 gives ~144 DPI which is sufficient for OCR.
+ * Scale 3.5 gives ~252 DPI which is recommended for handwriting OCR.
  */
 export async function pdfToImageDataUrls(arrayBuffer: ArrayBuffer): Promise<string[]> {
     const loadingTask = getDocument({
@@ -20,24 +20,25 @@ export async function pdfToImageDataUrls(arrayBuffer: ArrayBuffer): Promise<stri
     } as never);
 
     const pdf = await loadingTask.promise;
-    const images: string[] = [];
+    const images = await Promise.all(
+        Array.from({ length: pdf.numPages }, async (_, index) => {
+            const page = await pdf.getPage(index + 1);
+            const viewport = page.getViewport({ scale: 3.5 });
 
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        const viewport = page.getViewport({ scale: 2.0 });
+            const canvas = createCanvas(viewport.width, viewport.height);
+            const context = canvas.getContext("2d");
 
-        const canvas = createCanvas(viewport.width, viewport.height);
-        const context = canvas.getContext("2d");
+            await page.render({
+                canvas: canvas as never,
+                canvasContext: context as unknown as CanvasRenderingContext2D,
+                viewport,
+            }).promise;
 
-        await page.render({
-            canvas: canvas as never,
-            canvasContext: context as unknown as CanvasRenderingContext2D,
-            viewport,
-        }).promise;
-
-        images.push(canvas.toDataURL("image/png"));
-        page.cleanup();
-    }
+            const image = canvas.toDataURL("image/png");
+            page.cleanup();
+            return image;
+        }),
+    );
 
     await pdf.destroy();
 

@@ -3,12 +3,6 @@ import OpenAI from "openai";
 import { parseOcrText } from "@/lib/ocr-parser";
 import { buildOcrResponse, OcrServiceError } from "@/lib/services/ocr-service";
 
-const EXPECTED_TITLES = [
-    "CUSTOMER APPLICATION FORM",
-    "PERSONAL INFORMATION",
-    "NEXT OF KIN (NOK) INFORMATION",
-] as const;
-
 const EXPECTED_FIELDS = [
     "Title",
     "Surname",
@@ -111,27 +105,23 @@ Decision rules:
 - isExpectedDocument=false when key headings are missing, matched labels are sparse, or the layout is clearly a different form.
 - Be conservative: if uncertain, return false.`;
 
-const OCR_PROMPT = `You are an OCR assistant specialised in hand-filled CUSTOMER APPLICATION FORM pages.
+const OCR_PROMPT = `This is a scanned hand-filled CUSTOMER APPLICATION FORM. Extract the handwritten value next to each numbered field label.
 
-Analyse the form image and respond ONLY with a valid JSON object in this exact format - no explanation outside the JSON:
+Respond ONLY with a valid JSON object in this exact format - no explanation outside the JSON:
 {
   "text": "<full verbatim text from the form, preserving newlines>",
   "fields": [
-        { "name": "<field label>", "value": "<field value>", "confidence": 0.0 }
+        { "name": "<field label>", "value": "<handwritten value>", "confidence": 0.0 }
   ]
 }
 
-Rules:
-- "text" must contain every word visible in the image, in reading order.
-- "fields" must return these labels (exact names) when present on the page:
-${EXPECTED_FIELDS.map((field) => `  - ${field}`).join("\n")}
-- "fields" must also include any additional printed label/value pairs on the page, even if not in the list above.
-- If a field has no visible value, use an empty string for "value".
-- "confidence" must be a number from 0 to 1 representing how certain you are about the extracted value.
-- Use lower confidence for faint, ambiguous, partially occluded, or hard-to-read handwriting.
-- If a character is hard to decipher in one place, cross-check repeated occurrences elsewhere in the same document to resolve it.
-- Return a value for every identified field.
-- The forms are primarily for Nigerians, so names, street names, and places are likely Nigerian; use this context to disambiguate uncertain handwriting when needed.`;
+The numbered fields are:
+${EXPECTED_FIELDS.map((field, i) => `  ${i + 1}. ${field}`).join("\n")}
+
+- Read the handwritten value physically written next to each numbered label. Use the number as a spatial anchor.
+- If a value is unclear, write exactly what you see and set confidence below 0.7. Do not guess or infer from context.
+- If no value is written, use an empty string.
+- "confidence" is 0-1. Reflect genuine uncertainty — do not inflate it.`;
 
 let cachedClient: OpenAI | null = null;
 
@@ -181,6 +171,25 @@ function extractGuardJson(content: string): {
         matchedTitles?: string[];
         matchedFields?: string[];
     };
+}
+
+async function runOcrRequest(client: OpenAI, dataUrl: string) {
+    const completion = await client.chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+            {
+                role: "user",
+                content: [
+                    { type: "text", text: OCR_PROMPT },
+                    { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
+                ],
+            },
+        ],
+        max_tokens: 4096,
+        temperature: 0,
+    });
+
+    return completion.choices[0]?.message?.content ?? "";
 }
 
 export async function processWithOpenAi(file: File) {
@@ -251,38 +260,9 @@ export async function processWithOpenAi(file: File) {
         );
     }
 
-    const completion = await client.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-            {
-                role: "user",
-                content: [
-                    { type: "text", text: OCR_PROMPT },
-                    { type: "image_url", image_url: { url: dataUrls[0], detail: "high" } },
-                ],
-            },
-        ],
-        max_tokens: 4096,
-    });
-
-    // For multi-page PDFs, run OCR on all remaining pages and combine
-    const ocrContents: string[] = [completion.choices[0]?.message?.content ?? ""];
-    for (let i = 1; i < dataUrls.length; i++) {
-        const pageCompletion = await client.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: OCR_PROMPT },
-                        { type: "image_url", image_url: { url: dataUrls[i], detail: "high" } },
-                    ],
-                },
-            ],
-            max_tokens: 4096,
-        });
-        ocrContents.push(pageCompletion.choices[0]?.message?.content ?? "");
-    }
+    const ocrContents = await Promise.all(
+        dataUrls.map((dataUrl) => runOcrRequest(client, dataUrl)),
+    );
 
     let rawText = "";
     const fieldMap = new Map<string, { value: string; confidence: number | null }>();
