@@ -119,7 +119,7 @@ The numbered fields are:
 ${EXPECTED_FIELDS.map((field, i) => `  ${i + 1}. ${field}`).join("\n")}
 
 - Read the handwritten value physically written next to each numbered label. Use the number as a spatial anchor.
-- If a value is unclear, write exactly what you see and set confidence below 0.7. Do not guess or infer from context.
+- If a value is unclear, write exactly what you see and set confidence below 0.7. Do not substitute a value from another field.
 - If no value is written, use an empty string.
 - "confidence" is 0-1. Reflect genuine uncertainty — do not inflate it.`;
 
@@ -131,6 +131,7 @@ function getOpenAiClient(): OpenAI {
     }
 
     const apiKey = process.env.OPENAI_API_KEY;
+
     if (!apiKey) {
         throw new OcrServiceError(500, "Missing OPENAI_API_KEY environment variable.");
     }
